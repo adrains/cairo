@@ -49,20 +49,28 @@ def calculate_band_flux(wavelengths, fluxes, template_profile, filt):
     h = 6.62607015 * 10**-34 # J sec
     c = 299792458 * 10 **10
     
+    # Assume solar radii for synthetic fluxes/star, and scale to 10 pc distance
     r_sun = 6.95700*10**8        # metres
     d_10pc = 10 * 3.0857*10**16  # metres
     
     flux = (r_sun / d_10pc)**2 * fluxes
     
+    # Compute the flux density of the star
     mean_flux_density = (simps(flux*filt_profile*wavelengths, wavelengths)
                          / simps(filt_profile*wavelengths, wavelengths))
     
-    vega_mags = {"j":[31.47* 10**-11, 0.899], 
-                 "h":[11.38* 10**-11, 1.379], 
-                 "k":[3.961* 10**-11, 1.886]}  # erg cm-2 s-1 A-1
+    # Define Vega fluxes (erg s^-1 cm^-2 A^-1) and zeropoints for each filter
+    # band. For the W band, treat it as the average of J and K.
+    # Vega fluxes from Casagrande & VendenBerg 2014, Table 1
+    # Band zeropoints from Bessell, Castelli, & Plez 1998, Table A2
+    vega_mags = {"j":[3.129* 10**-10, 0.899], 
+                 "h":[1.113* 10**-10, 1.379], 
+                 "k":[4.283* 10**-11, 1.886]}  # erg cm-2 s-1 A-1
     vega_mags["w"] = [np.mean([vega_mags["j"][0], vega_mags["h"][0]]),
                       np.mean([vega_mags["j"][1], vega_mags["h"][1]])]
     
+    # Calculate the magnitude of each star w.r.t. Vega
+    # mag_star = -2.5 log10(F_star / F_vega) + zero-point
     mag = -2.5 * np.log10(mean_flux_density/vega_mags[filt][0]) + vega_mags[filt][1]
     
     return mag
