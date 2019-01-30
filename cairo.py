@@ -12,13 +12,36 @@ from scipy.integrate import simps
 from matplotlib.backends.backend_pdf import PdfPages
 
 
-def load_and_extend_profiles(filter="j", min_wl=1200, max_wl=210000):
+def load_and_extend_profiles(filt="j", min_wl=1200, max_wl=210000):
     """Load in the specified filter profile and zero pad both ends in 
     preparation for feeding into an interpolation function.
     """
-    # Load the filter profile, and convert to Angstroms
-    filt_profile = np.loadtxt("2mass_%s_profile.txt" % filter)
-    filt_profile[:,0] = filt_profile[:,0] * 10**4
+    filters_2mass = np.array(["j", "h", "k"])
+    filters_gaia = np.array(["g", "bp", "rp"])
+    
+    # 2MASS filter profiles
+    if filt in filters_2mass:
+        # Load the filter profile, and convert to Angstroms
+        filt_profile = np.loadtxt("2mass_%s_profile.txt" % filt)
+        filt_profile[:,0] = filt_profile[:,0] * 10**4
+    
+    # Gaia filter profiles
+    elif filt in filters_gaia:
+        # Import gaia profiles, and set undefined values from 99.99 to 0
+        gaia_profiles = np.loadtxt("GaiaDR2_RevisedPassbands.dat")
+        gaia_profiles[gaia_profiles==99.99] = 0
+        
+        # Format of file is [wl, G, G_err, Bp, Bp_err, Rp, Rp_err]
+        wl = gaia_profiles[:,0]
+        
+        col = int(np.argwhere(filters_gaia==filt)) * 2 + 1
+        
+        passband = gaia_profiles[:,col]
+        
+        filt_profile = np.vstack([wl, passband]).T
+        
+    else:
+        raise Exception("Invalid filter profile")
     
     # Pre- and post- append zeros from min_wl to max_wl
     prepad_wl = np.arange(min_wl, filt_profile[0,0], 1000)
@@ -88,10 +111,25 @@ def plot_jhk_profiles():
         # Load in the profile, convert to Angstroms, and scale y
         filt_profile = np.loadtxt(profiles[filt_i])
         filt_profile[:,0] = filt_profile[:,0] * 10**4
-        filt_profile[:,1] = filt_profile[:,1] * plt.gca().get_ybound()[1]
+        filt_profile[:,1] = filt_profile[:,1]# * plt.gca().get_ybound()[1]
         
         plt.fill_between(filt_profile[:,0], filt_profile[:,1], label=filt,
                          alpha=0.25, color=colours[filt_i])
+                         
+
+def plot_gaia_profiles():
+    """Plot the Gaia G, Bp, and Rp filter profiles.
+    """
+    # Import gaia profiles, and set undefined values from 99.99 to 0
+    gaia_profiles = np.loadtxt("GaiaDR2_RevisedPassbands.dat")
+    gaia_profiles[gaia_profiles==99.99] = 0
+    
+    filters = ["G", "Bp", "Rp"]
+    colours = ["green", "blue", "red"]
+    
+    for filt_i, filt in enumerate(filters):
+        plt.fill_between(gaia_profiles[:,0], gaia_profiles[:,filt_i*2+1], 
+                         label=filt, alpha=0.25, color=colours[filt_i])
 
 
 def import_marcs_flx_grid(n_wl, import_full_grid=False):
@@ -249,6 +287,77 @@ def plot_jw_vs_jh_fixed_temp(grid, wl, temps, fehs, loggs):
 
                 pdf.savefig()
             plt.close() 
+            
+            
+            
+def plot_jw_vs_jh_fixed_logg(grid, wl, temps, fehs, loggs):
+    """Plot J-W as a function of J-H with tracks of constant [Fe/H] and varying
+    temp point colour, with fixed logg per plot.
+    
+    Note that grid has axes [temps, loggs, fehs, fluxes]
+    """
+    # Define profiles
+    w_band = np.array([[0.12*10**4, 0], [1.339*10**4, 0], [1.34*10**4, 1],
+                       [1.5*10**4, 1], [1.501*10**4, 0], [21*10**4, 0]]) 
+    filters = ["j", "h", "k"]
+    [j_band, h_band, k_band] = [load_and_extend_profiles(filt) 
+                                for filt in filters]
+    
+    # Plot J-H versus J-W tracks for logg, [Fe/H], and Teff (fixed per plot)
+    with PdfPages("j-h_vs_j-w_fixed_logg.pdf") as pdf:
+        for logg_i, logg in enumerate(loggs):
+            plt.close("all")
+            do_plotting = False
+            
+            for feh_i, feh in enumerate(fehs[::2][:-1]):
+                j_h = []
+                j_w = []
+                marker_size = []
+                for temp_i, temp in enumerate(temps[::2]):
+                    # Compute the magnitudes
+                    j_mag = calculate_band_flux(wl[:60434], 
+                                                grid[temp_i, logg_i, feh_i, :], 
+                                                j_band, "j")
+                    h_mag = calculate_band_flux(wl[:60434], 
+                                                grid[temp_i, logg_i, feh_i, :], 
+                                                h_band, "h")
+                    w_mag = calculate_band_flux(wl[:60434], 
+                                                grid[temp_i, logg_i, feh_i, :], 
+                                                w_band, "w")
+
+                    j_h.append(j_mag - h_mag)
+                    j_w.append(j_mag - w_mag)
+                
+                # Mask out any nan points in the series (due to the grid having
+                # gaps) so we can plot continuous lines
+                j_h = np.array(j_h)
+                j_w = np.array(j_w)
+                j_h_mask = np.isfinite(j_h)
+                j_w_mask = np.isfinite(j_w)
+                
+                # Plot lines and points separately to facilitate different
+                # colours and marker scales
+                if len(j_h[j_h_mask]) > 0:
+                    plt.scatter(j_h, j_w, s=128, c=temps[::2], cmap="magma", 
+                                zorder=2)
+                    plt.plot(j_h[j_h_mask], j_w[j_w_mask], "--", zorder=1,
+                             label="[Fe/H]=%s" % feh)            
+                    do_plotting = True
+            
+            # Only bother with axis details/save plot if the grid had data at
+            # this temperature - otherwise move on
+            if do_plotting:
+                plt.title("logg = %0.1f" % logg)
+                plt.xlabel("J-H")
+                plt.ylabel("J-W")
+                cb = plt.colorbar()
+                cb.set_label(r"T$_{\rm eff}$ (K)")
+                plt.legend()
+                plt.grid()
+                plt.gcf().set_size_inches(16, 9)
+
+                pdf.savefig()
+            plt.close() 
     
 
 def plot_jw_vs_jh(grid, wl, temps, fehs, loggs, use_full_grid=False):
@@ -318,6 +427,48 @@ def plot_jw_vs_jh(grid, wl, temps, fehs, loggs, use_full_grid=False):
     plt.grid()
     plt.gcf().set_size_inches(16, 9)
     plt.savefig("j-h_vs_j-w_vs_feh.pdf")
+
+
+def plot_spectra(grid, wl, temps, fehs, loggs):
+    """
+    """
+    plt.close("all")
+    
+    # Plot M4.5V
+    #label = r"M4.5V T$_{\rm eff}$ = 3100 K, logg = 4.5, [Fe/H] = 0.75"
+    #flux = grid[6, 10, 11]
+    #plt.plot(wl[:60434], flux/np.max(flux), label=label, linewidth=0.05)
+    
+    # Plot M6.5V
+    label = r"M4.5V T$_{\rm eff}$ = 2700 K, logg = 4.5, [Fe/H] = 0.0"
+    flux = grid[6, 10, 8]
+    plt.plot(wl[:60434], flux/np.max(flux), label=label, linewidth=0.05)
+    
+    # Plot M8V
+    label = r"M4.5V T$_{\rm eff}$ = 2500 K, logg = 4.5, [Fe/H] = -1.0"
+    flux = grid[6, 10, 4]
+    plt.plot(wl[:60434], flux/np.max(flux), label=label, linewidth=0.05)
+    
+    # Plot M4.5III
+    label = r"M4.5III T$_{\rm eff}$ = 3100 K, logg = 1.5, [Fe/H] = 0.75"
+    flux = grid[6, 4, 11]
+    plt.plot(wl[:60434], flux/np.max(flux), label=label, linewidth=0.05)
+    
+    # Plot the filter profiles
+    plot_jhk_profiles()
+    
+    leg = plt.legend(loc="best")
+    for legobj in leg.legendHandles:
+        legobj.set_linewidth(2.0)
+    
+    plt.xlabel("Wavelength (A)")
+    plt.ylabel("Normalised Flux")
+    
+    plt.xlim([10000, 20000])
+    
+    plt.gcf().set_size_inches(16, 9)
+    plt.savefig("w_band_spectra.pdf")
+
 
 """
 # Plot example fluxes with JHK filters overlaid
