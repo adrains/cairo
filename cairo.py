@@ -117,13 +117,16 @@ def plot_jhk_profiles():
                          alpha=0.25, color=colours[filt_i])
                          
 
-def plot_gaia_profiles():
+def plot_gaia_profiles(in_angstroms=True):
     """Plot the Gaia G, Bp, and Rp filter profiles.
     """
     # Import gaia profiles, and set undefined values from 99.99 to 0
     gaia_profiles = np.loadtxt("GaiaDR2_RevisedPassbands.dat")
     gaia_profiles[gaia_profiles==99.99] = 0
     
+    if in_angstroms:
+        gaia_profiles[:,0] *= 10
+
     filters = ["G", "Bp", "Rp"]
     colours = ["green", "blue", "red"]
     
@@ -131,6 +134,26 @@ def plot_gaia_profiles():
         plt.fill_between(gaia_profiles[:,0], gaia_profiles[:,filt_i*2+1], 
                          label=filt, alpha=0.25, color=colours[filt_i])
 
+
+def plot_wise_profiles(in_angstroms=True):
+    """Plot the WISE W1, W2, W3, and W4 filter profiles
+    """
+    # Import gaia profiles, and set undefined values from 99.99 to 0
+    gaia_profiles = np.loadtxt("GaiaDR2_RevisedPassbands.dat")
+    gaia_profiles[gaia_profiles==99.99] = 0
+    
+    if in_angstroms:
+        scale = 10**4
+    else:
+        scale = 10**3
+
+    filters = ["W1", "W2", "W3", "W4"]
+    #colours = ["green", "blue", "red"]
+    
+    for filt_i, filt in enumerate(filters):
+        filt_profile = np.loadtxt("RSR-W%s.EE.txt" % (filt_i+1))
+        plt.fill_between(filt_profile[:,0]*scale, filt_profile[:,1], 
+                         label=filt, alpha=0.25)#, color=colours[filt_i])
 
 def import_marcs_flx_grid(n_wl, import_full_grid=False):
     """Import the MARCS model grid of flx files per the local directory 
@@ -213,6 +236,153 @@ def import_marcs_flx_grid_server(n_wl, import_full_grid=False):
     return grid, temps, fehs, loggs
 
 
+def import_marcs_flx_grid_alpha(n_wl=60434):
+    """Import the MARCS model grid of flx files per the server directory 
+    structure.
+    """
+    temps = np.arange(2500, 4500, 100)
+    fehs = np.arange(-2, 0.25, 0.25)  
+    loggs = [4.5]
+    
+    a04_grid = np.zeros((len(temps), len(loggs), len(fehs), n_wl))
+    aNE_grid = np.zeros((len(temps), len(loggs), len(fehs), n_wl))
+    aSTD_grid = np.zeros((len(temps), len(loggs), len(fehs), n_wl))
+    
+    # Folders sorted by logg, two different kinds of models: spherical and 
+    # plane parallel
+    a04_grid_files = glob.glob("a04_ppl_vtur2_log4.5/*.flx.gz")
+    aNE_grid_files = glob.glob("aNE_ppl_vtur2_log4.5/*.flx.gz")
+    aSTD_grid_files  = glob.glob("ppl_vtur2_log4.5/*.flx.gz")
+    
+    a04_grid_files.sort()
+    aNE_grid_files.sort()
+    aSTD_grid_files.sort()
+    
+    grids = [a04_grid, aNE_grid, aSTD_grid]
+    files = [a04_grid_files, aNE_grid_files, aSTD_grid_files]
+    
+    for (grid_files, grid) in zip(files, grids):
+        # Load files into grid, taking a little over half of the wavelength info
+        for gfile in grid_files:
+            # Determine the parameters of the file
+            gfn = gfile.split("/")[-1]
+        
+            try:
+                if ":" in gfn:
+                    temp_i = np.where(temps==int(gfn.split(":")[0][1:]))[0][0]
+                    logg_i = 0
+                    feh_i = np.where(fehs==float(gfn.split(":")[5][1:]))[0][0]
+                else:
+                    temp_i = np.where(temps==int(gfn.split("_")[0][1:]))[0][0]
+                    logg_i = 0
+                    feh_i = np.where(fehs==float(gfn.split("_")[5][1:]))[0][0]
+            except:
+                continue
+            fluxes = np.loadtxt(gfile)
+        
+            grid[temp_i, logg_i, feh_i, :] = fluxes[:n_wl]
+        
+    return a04_grid, aNE_grid, aSTD_grid, temps, fehs, loggs
+
+
+def plot_jw_vs_jh_alpha(a04_grid, aNE_grid, aSTD_grid, wl, temps, fehs, loggs):
+    """Plot J-W as a function of J-H with tracks of constant [Fe/H] and varying
+    temp point colour, with fixed logg per plot.
+    
+    Note that grid has axes [temps, loggs, fehs, fluxes]
+    """
+    # Save jwhk data. Format: [logg, feh, teff, j, w, h]
+    photometry = []
+    
+    # Define profiles
+    w_band = np.array([[0.12*10**4, 0], [1.339*10**4, 0], [1.34*10**4, 1],
+                       [1.5*10**4, 1], [1.501*10**4, 0], [21*10**4, 0]]) 
+    filters = ["j", "h", "k"]
+    [j_band, h_band, k_band] = [load_and_extend_profiles(filt) 
+                                for filt in filters]
+    
+    alpha_treatment = ["Alpha Non-Enhanced (alpha=-0.4)", "Alpha Enhanced (alpha=0.4)", 
+                       "Standard Alpha: alpha=0.0 (Z=0.0), alpha=0.1 (Z=-0.25), alpha=0.2 (Z=-0.5), alpha=0.3 (Z=-0.75), alpha=0.4 (Z<=-1.0)"]
+    grids = [a04_grid, aNE_grid, aSTD_grid]
+    logg_i = 0
+    logg = 4.5
+    
+    alphas = [[-0.4, -0.4, -0.4, -0.4, -0.4, -0.4, -0.4, -0.4, -0.4],
+              [0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4],
+              [0.4, 0.4, 0.4, 0.4, 0.4, 0.3, 0.2, 0.1, 0.0]]
+              
+    alpha_bools = [[True, False, False], 
+                   [False, True, False],
+                   [False, False, True]]
+    
+    # Plot J-H versus J-W tracks for logg, [Fe/H], and Teff (fixed per plot)
+    with PdfPages("j-h_vs_j-w_alpha.pdf") as pdf:
+        for grid_i, grid in enumerate(grids):
+            plt.close("all")
+            do_plotting = False
+            for temp_i, temp in enumerate(temps[::2]):
+            
+                j_h = []
+                j_w = []
+                marker_size = []
+                for feh_i, feh in enumerate(fehs):#[::2][:-1]):
+                    # Compute the magnitudes
+                    j_mag = calculate_band_flux(wl[:60434], 
+                                                grid[temp_i, logg_i, feh_i, :], 
+                                                j_band, "j")
+                    h_mag = calculate_band_flux(wl[:60434], 
+                                                grid[temp_i, logg_i, feh_i, :], 
+                                                h_band, "h")
+                    w_mag = calculate_band_flux(wl[:60434], 
+                                                grid[temp_i, logg_i, feh_i, :], 
+                                                w_band, "w") * 0.9
+                    
+                    photometry.append([logg, feh, temp, j_mag, w_mag, h_mag] + alpha_bools[grid_i])
+                    
+                    j_h.append(j_mag - h_mag)
+                    j_w.append(j_mag - w_mag)
+                
+                # Mask out any nan points in the series (due to the grid having
+                # gaps) so we can plot continuous lines
+                j_h = np.array(j_h)
+                j_w = np.array(j_w)
+                j_h_mask = np.isfinite(j_h)
+                j_w_mask = np.isfinite(j_w)
+                
+                # Plot lines and points separately to facilitate different
+                # colours and marker scales
+                if len(j_h[j_h_mask]) > 0:
+                    #plt.scatter(j_h, j_w, s=128, c=temps[::2], cmap="magma", 
+                    plt.scatter(j_h, j_w, s=128, c=fehs, cmap="magma", 
+                                zorder=2)
+                    plt.plot(j_h[j_h_mask], j_w[j_w_mask], "--", zorder=1,
+                             label="Teff=%s" % temp)            
+                    do_plotting = True
+                    
+            
+            # Only bother with axis details/save plot if the grid had data at
+            # this temperature - otherwise move on
+            if do_plotting:
+                plt.title(alpha_treatment[grid_i])
+                plt.xlabel("J-H")
+                plt.ylabel("J-W")
+                cb = plt.colorbar()
+                cb.set_label("[Fe/H]")
+                #cb.set_label(r"T$_{\rm eff}$ (K)")
+                plt.legend()
+                plt.grid()
+                plt.gcf().set_size_inches(16, 9)
+
+                pdf.savefig()
+            plt.close() 
+    
+    # Save and return the colour information        
+    np.savetxt("photometry.csv", photometry, delimiter=",", 
+               header="logg,[Fe/h],Teff,Jmag,Wmag,Hmag,alpha_enh,alpha_dep,alpha_std")        
+            
+    return photometry
+
+
 def plot_jw_vs_jh_fixed_temp(grid, wl, temps, fehs, loggs):
     """Plot J-W as a function of J-H with tracks of constant logg, [Fe/H] as 
     point colour, and fixed Teff per plot.
@@ -288,6 +458,8 @@ def plot_jw_vs_jh_fixed_temp(grid, wl, temps, fehs, loggs):
                 pdf.savefig()
             plt.close() 
             
+ 
+ 
             
             
 def plot_jw_vs_jh_fixed_logg(grid, wl, temps, fehs, loggs):
@@ -296,6 +468,9 @@ def plot_jw_vs_jh_fixed_logg(grid, wl, temps, fehs, loggs):
     
     Note that grid has axes [temps, loggs, fehs, fluxes]
     """
+    # Save jwhk data. Format: [logg, feh, teff, j, w, h]
+    photometry = []
+    
     # Define profiles
     w_band = np.array([[0.12*10**4, 0], [1.339*10**4, 0], [1.34*10**4, 1],
                        [1.5*10**4, 1], [1.501*10**4, 0], [21*10**4, 0]]) 
@@ -308,12 +483,12 @@ def plot_jw_vs_jh_fixed_logg(grid, wl, temps, fehs, loggs):
         for logg_i, logg in enumerate(loggs):
             plt.close("all")
             do_plotting = False
+            for temp_i, temp in enumerate(temps[::2]):
             
-            for feh_i, feh in enumerate(fehs[::2][:-1]):
                 j_h = []
                 j_w = []
                 marker_size = []
-                for temp_i, temp in enumerate(temps[::2]):
+                for feh_i, feh in enumerate(fehs):#[::2][:-1]):
                     # Compute the magnitudes
                     j_mag = calculate_band_flux(wl[:60434], 
                                                 grid[temp_i, logg_i, feh_i, :], 
@@ -323,8 +498,10 @@ def plot_jw_vs_jh_fixed_logg(grid, wl, temps, fehs, loggs):
                                                 h_band, "h")
                     w_mag = calculate_band_flux(wl[:60434], 
                                                 grid[temp_i, logg_i, feh_i, :], 
-                                                w_band, "w")
-
+                                                w_band, "w") * 0.9
+                    
+                    photometry.append([logg, feh, temp, j_mag, w_mag, h_mag])
+                    
                     j_h.append(j_mag - h_mag)
                     j_w.append(j_mag - w_mag)
                 
@@ -338,10 +515,11 @@ def plot_jw_vs_jh_fixed_logg(grid, wl, temps, fehs, loggs):
                 # Plot lines and points separately to facilitate different
                 # colours and marker scales
                 if len(j_h[j_h_mask]) > 0:
-                    plt.scatter(j_h, j_w, s=128, c=temps[::2], cmap="magma", 
+                    #plt.scatter(j_h, j_w, s=128, c=temps[::2], cmap="magma", 
+                    plt.scatter(j_h, j_w, s=128, c=fehs, cmap="magma", 
                                 zorder=2)
                     plt.plot(j_h[j_h_mask], j_w[j_w_mask], "--", zorder=1,
-                             label="[Fe/H]=%s" % feh)            
+                             label="Teff=%s" % temp)            
                     do_plotting = True
             
             # Only bother with axis details/save plot if the grid had data at
@@ -351,13 +529,20 @@ def plot_jw_vs_jh_fixed_logg(grid, wl, temps, fehs, loggs):
                 plt.xlabel("J-H")
                 plt.ylabel("J-W")
                 cb = plt.colorbar()
-                cb.set_label(r"T$_{\rm eff}$ (K)")
+                cb.set_label("[Fe/H]")
+                #cb.set_label(r"T$_{\rm eff}$ (K)")
                 plt.legend()
                 plt.grid()
                 plt.gcf().set_size_inches(16, 9)
 
                 pdf.savefig()
             plt.close() 
+    
+    # Save and return the colour information        
+    np.savetxt("photometry.csv", photometry, delimiter=",", 
+               header="logg,[Fe/h],Teff,Jmag,Wmag,Hmag")        
+            
+    return photometry
     
 
 def plot_jw_vs_jh(grid, wl, temps, fehs, loggs, use_full_grid=False):
@@ -469,6 +654,43 @@ def plot_spectra(grid, wl, temps, fehs, loggs):
     plt.gcf().set_size_inches(16, 9)
     plt.savefig("w_band_spectra.pdf")
 
+
+def plot_from_photometry():
+    """
+    """
+    plt.close("all")
+    # logg,[Fe/h],Teff,Jmag,Wmag,Hmag
+    photometry = np.loadtxt("photometry.csv", delimiter=",")
+    
+    # Plot just logg=4.5
+    phot_4d5 = photometry[photometry[:,0]==4.5, :]
+    fehs = list(set(phot_4d5[:,1]))
+    fehs.sort()
+    temps = list(set(phot_4d5[:,2]))
+    temps.sort()
+    
+    for temp in temps[::2]:
+        subset = phot_4d5[phot_4d5[:,2]==temp, :]
+        j_h = subset[:,3] - subset[:,5]
+        j_w = subset[:,3] - subset[:,4]
+
+        j_h = np.array(j_h)
+        j_w = np.array(j_w)
+        j_h_mask = np.isfinite(j_h)
+        j_w_mask = np.isfinite(j_w)
+        
+        #import pdb
+        #pdb.set_trace()
+        plt.scatter(j_h, j_w, c=subset[:,1], cmap="magma")
+        plt.plot(j_h[j_h_mask], j_w[j_w_mask], "--", label="Teff=%i" % temp)
+        
+        
+    plt.xlabel("J-H")
+    plt.ylabel("J-W")
+    cb = plt.colorbar()
+    cb.set_label("[Fe/H]")
+    plt.legend()
+    plt.grid()
 
 """
 # Plot example fluxes with JHK filters overlaid
