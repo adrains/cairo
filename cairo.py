@@ -11,7 +11,9 @@ from scipy.interpolate import interp1d
 from scipy.integrate import simps
 from matplotlib.backends.backend_pdf import PdfPages
 
-
+# -----------------------------------------------------------------------------
+# Loading Profiles, Calculating Magnitudes
+# -----------------------------------------------------------------------------
 def load_and_extend_profiles(filt="j", min_wl=1200, max_wl=210000):
     """Load in the specified filter profile and zero pad both ends in 
     preparation for feeding into an interpolation function.
@@ -55,6 +57,23 @@ def load_and_extend_profiles(filt="j", min_wl=1200, max_wl=210000):
     filt_profile = np.concatenate((prepad, filt_profile, postpad))
     
     return filt_profile
+
+
+def extend_filter_profile(filt_profile, min_wl=1200, max_wl=210000):
+    """Zero pad both ends in preparation for interpolation function.
+    """
+    # Pre- and post- append zeros from min_wl to max_wl
+    prepad_wl = np.arange(min_wl, filt_profile[0,0], 1000)
+    prepad = np.zeros((len(prepad_wl), 2))
+    prepad[:, 0] = prepad_wl
+    
+    postpad_wl = np.arange(filt_profile[-1,0], max_wl, 10000)
+    postpad = np.zeros((len(postpad_wl), 2))
+    postpad[:, 0] = postpad_wl
+    
+    filt_profile = np.concatenate((prepad, filt_profile, postpad))
+    
+    return filt_profile
      
 
 def calculate_band_flux(wavelengths, fluxes, template_profile, filt):
@@ -86,9 +105,13 @@ def calculate_band_flux(wavelengths, fluxes, template_profile, filt):
     # band. For the W band, treat it as the average of J and K.
     # Vega fluxes from Casagrande & VendenBerg 2014, Table 1
     # Band zeropoints from Bessell, Castelli, & Plez 1998, Table A2
-    vega_mags = {"j":[3.129* 10**-10, 0.899], 
-                 "h":[1.113* 10**-10, 1.379], 
-                 "k":[4.283* 10**-11, 1.886]}  # erg cm-2 s-1 A-1
+    vega_mags = {"B":[6.3170* 10**-9, -0.120],
+                 "V":[3.6186* 10**-9, 0],
+                 "Rc":[2.1652* 10**-9, 0.186],
+                 "Ic":[1.1327* 10**-9, 0.444],
+                 "J":[3.129* 10**-10, 0.899], 
+                 "H":[1.113* 10**-10, 1.379], 
+                 "Ks":[4.283* 10**-11, 1.886]}  # erg cm-2 s-1 A-1
     vega_mags["w"] = [np.mean([vega_mags["j"][0], vega_mags["h"][0]]),
                       np.mean([vega_mags["j"][1], vega_mags["h"][1]])]
     
@@ -99,6 +122,73 @@ def calculate_band_flux(wavelengths, fluxes, template_profile, filt):
     return mag
     
 
+
+def calculate_band_flux_ab(wavelengths, fluxes):
+    """
+    """
+    # Constants
+    f0_lambda = 3.631 * 10 **-9 # ergs s^-1 cm^-2 A^-1
+    zp_lambda = -21.10
+    f0_nu = 3.631 * 10 **-20 # ergs s^-1 cm^-2 Hz^-1
+    zp_nu = -48.6
+    
+    filters = ["u", "g", "r", "i", "z"]
+    
+    # AB Magnitude Zeropoints from:
+    # http://svo2.cab.inta-csic.es/svo/theory/fps3/index.php?id=SLOAN/
+    # SDSS.u&&mode=browse&gname=SLOAN&gname2=SDSS#filter
+    ab_zp = {"u":8.423e-9,
+             "g":5.055e-9,
+             "r":2.904e-9,
+             "i":1.967e-9,
+             "z":1.375e-9} # erg cm^-2 s^-1 A^-1
+    
+    filter_profile_files = {"u":"filters/SLOAN_SDSS.u.dat",
+                            "g":"filters/SLOAN_SDSS.g.dat",
+                            "r":"filters/SLOAN_SDSS.r.dat",
+                            "i":"filters/SLOAN_SDSS.i.dat",
+                            "z":"filters/SLOAN_SDSS.z.dat"}
+    
+    # Assume solar radii for synthetic fluxes/star, and scale to 10 pc distance
+    r_sun = 6.95700*10**8        # metres
+    d_10pc = 10 * 3.0857*10**16  # metres         
+             
+
+    ab_mags = {}
+
+    # Compute all fluxes at once for simplicity
+    for filt in filters:
+        # Load the filter profile
+        filt_profile = np.loadtxt(filter_profile_files[filt])
+        
+        # Extend the filter profile to the limits of the wavelength scale
+        filt_profile = extend_filter_profile(filt_profile)
+        
+        # Put the filter profile on the same wavelength scale
+        calc_filt_profile = interp1d(filt_profile[:,0], filt_profile[:,1],
+                                     kind="linear")
+        filt_profile = calc_filt_profile(wavelengths)
+                                     
+        # Scale the fluxes by stellar size and interstellar distance
+        flux = (r_sun / d_10pc)**2 * fluxes
+
+        # Compute the flux density of the star
+        # Equation 6 from Casagrande & VendenBerg 2014
+        mag = (-2.5*np.log10(simps(wavelengths*flux*filt_profile)
+                             / (f0_lambda*simps(wavelengths*filt_profile)))
+               -2.5*np.log10(simps(wavelengths*filt_profile)
+                              / simps(filt_profile/wavelengths))
+               + 18.6921)
+                
+        # Add to the dictionary of returned fluxes and move on
+        ab_mags[filt] = mag
+        
+    return ab_mags
+        
+
+# -----------------------------------------------------------------------------
+# Plotting Filter Profiles
+# -----------------------------------------------------------------------------
 def plot_jhk_profiles():
     """Plot the JHK filter profiles.
     """
@@ -155,6 +245,10 @@ def plot_wise_profiles(in_angstroms=True):
         plt.fill_between(filt_profile[:,0]*scale, filt_profile[:,1], 
                          label=filt, alpha=0.25)#, color=colours[filt_i])
 
+
+# -----------------------------------------------------------------------------
+# Importing Model Grids
+# -----------------------------------------------------------------------------
 def import_marcs_flx_grid(n_wl, import_full_grid=False):
     """Import the MARCS model grid of flx files per the local directory 
     structure.
@@ -285,6 +379,10 @@ def import_marcs_flx_grid_alpha(n_wl=60434):
     return a04_grid, aNE_grid, aSTD_grid, temps, fehs, loggs
 
 
+
+# -----------------------------------------------------------------------------
+# Plotting Colour-Colour Diagrams
+# -----------------------------------------------------------------------------
 def plot_jw_vs_jh_alpha(a04_grid, aNE_grid, aSTD_grid, wl, temps, fehs, loggs):
     """Plot J-W as a function of J-H with tracks of constant [Fe/H] and varying
     temp point colour, with fixed logg per plot.
@@ -329,13 +427,13 @@ def plot_jw_vs_jh_alpha(a04_grid, aNE_grid, aSTD_grid, wl, temps, fehs, loggs):
                     # Compute the magnitudes
                     j_mag = calculate_band_flux(wl[:60434], 
                                                 grid[temp_i, logg_i, feh_i, :], 
-                                                j_band, "j")
+                                                j_band, "J")
                     h_mag = calculate_band_flux(wl[:60434], 
                                                 grid[temp_i, logg_i, feh_i, :], 
-                                                h_band, "h")
+                                                h_band, "H")
                     w_mag = calculate_band_flux(wl[:60434], 
                                                 grid[temp_i, logg_i, feh_i, :], 
-                                                w_band, "w") * 0.9
+                                                w_band, "W") * 0.9
                     
                     photometry.append([logg, feh, temp, j_mag, w_mag, h_mag] + alpha_bools[grid_i])
                     
@@ -410,13 +508,13 @@ def plot_jw_vs_jh_fixed_temp(grid, wl, temps, fehs, loggs):
                     # Compute the magnitudes
                     j_mag = calculate_band_flux(wl[:60434], 
                                                 grid[temp_i, logg_i, feh_i, :], 
-                                                j_band, "j")
+                                                j_band, "J")
                     h_mag = calculate_band_flux(wl[:60434], 
                                                 grid[temp_i, logg_i, feh_i, :], 
-                                                h_band, "h")
+                                                h_band, "H")
                     w_mag = calculate_band_flux(wl[:60434], 
                                                 grid[temp_i, logg_i, feh_i, :], 
-                                                w_band, "w")
+                                                w_band, "W")
 
                     j_h.append(j_mag - h_mag)
                     j_w.append(j_mag - w_mag)
@@ -492,13 +590,13 @@ def plot_jw_vs_jh_fixed_logg(grid, wl, temps, fehs, loggs):
                     # Compute the magnitudes
                     j_mag = calculate_band_flux(wl[:60434], 
                                                 grid[temp_i, logg_i, feh_i, :], 
-                                                j_band, "j")
+                                                j_band, "J")
                     h_mag = calculate_band_flux(wl[:60434], 
                                                 grid[temp_i, logg_i, feh_i, :], 
-                                                h_band, "h")
+                                                h_band, "H")
                     w_mag = calculate_band_flux(wl[:60434], 
                                                 grid[temp_i, logg_i, feh_i, :], 
-                                                w_band, "w") * 0.9
+                                                w_band, "W") * 0.9
                     
                     photometry.append([logg, feh, temp, j_mag, w_mag, h_mag])
                     
@@ -579,13 +677,13 @@ def plot_jw_vs_jh(grid, wl, temps, fehs, loggs, use_full_grid=False):
                 # Compute the magnitudes
                 j_mag = calculate_band_flux(wl[:60434], 
                                             grid[temp_i, logg_i, feh_i, :], 
-                                            j_band, "j")
+                                            j_band, "J")
                 h_mag = calculate_band_flux(wl[:60434], 
                                             grid[temp_i, logg_i, feh_i, :], 
-                                            h_band, "h")
+                                            h_band, "H")
                 w_mag = calculate_band_flux(wl[:60434], 
                                             grid[temp_i, logg_i, feh_i, :], 
-                                            w_band, "w")
+                                            w_band, "W")
                 
                 if ((temp == fixed_temp_1 and logg == fixed_logg_1)
                     or (temp == fixed_temp_2 and logg == fixed_logg_2)
