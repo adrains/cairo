@@ -412,7 +412,7 @@ def import_marcs_flx_grid_alpha(n_wl=60434):
     """
     temps = np.arange(2500, 4500, 100)
     fehs = np.arange(-2, 0.25, 0.25)  
-    loggs = [4.5]
+    loggs = np.array([4.5, 5.0, 5.5])
     
     a04_grid = np.zeros((len(temps), len(loggs), len(fehs), n_wl))
     aNE_grid = np.zeros((len(temps), len(loggs), len(fehs), n_wl))
@@ -420,9 +420,9 @@ def import_marcs_flx_grid_alpha(n_wl=60434):
     
     # Folders sorted by logg, two different kinds of models: spherical and 
     # plane parallel
-    a04_grid_files = glob.glob("a04_ppl_vtur2_log4.5/*.flx.gz")
-    aNE_grid_files = glob.glob("aNE_ppl_vtur2_log4.5/*.flx.gz")
-    aSTD_grid_files  = glob.glob("ppl_vtur2_log4.5/*.flx.gz")
+    a04_grid_files = glob.glob("marcs/a04_ppl_vtur2_log*/*.flx.gz")
+    aNE_grid_files = glob.glob("marcs/aNE_ppl_vtur2_log*/*.flx.gz")
+    aSTD_grid_files  = glob.glob("marcs/ppl_vtur2_log*/*.flx.gz")
     
     a04_grid_files.sort()
     aNE_grid_files.sort()
@@ -440,11 +440,11 @@ def import_marcs_flx_grid_alpha(n_wl=60434):
             try:
                 if ":" in gfn:
                     temp_i = np.where(temps==int(gfn.split(":")[0][1:]))[0][0]
-                    logg_i = 0
+                    logg_i = np.where(loggs==float(gfn.split(":")[1][1:]))[0][0]
                     feh_i = np.where(fehs==float(gfn.split(":")[5][1:]))[0][0]
                 else:
                     temp_i = np.where(temps==int(gfn.split("_")[0][1:]))[0][0]
-                    logg_i = 0
+                    logg_i = np.where(loggs==float(gfn.split("_")[1][1:]))[0][0]
                     feh_i = np.where(fehs==float(gfn.split("_")[5][1:]))[0][0]
             except:
                 continue
@@ -482,17 +482,20 @@ def compute_photometry(a04_grid, aNE_grid, aSTD_grid, wl, temps, fehs, loggs):
     # Loop over each grid and calculate synthetic photometry
     for grid_i, grid in enumerate(grids):
         for temp_i, temp in enumerate(temps):
-            for feh_i, feh in enumerate(fehs):
-                # Get the fluxes for this portion of the grid, and check the 
-                # grid has actually been sampled here before proceeding
-                fluxes = grid[temp_i, logg_i, feh_i, :]
+            for logg_i, logg in enumerate(loggs):
+                for feh_i, feh in enumerate(fehs):
+                    # Get the fluxes for this portion of the grid, and check 
+                    # the grid has actually been sampled here before proceeding
+                    fluxes = grid[temp_i, logg_i, feh_i, :]
                 
-                if np.sum(fluxes) > 1:
-                    mags_ab = calculate_band_flux_ab(wl, fluxes)
-                    mags_vega = calculate_band_flux_vega(wl, fluxes)
+                    if np.sum(fluxes) > 1:
+                        mags_ab = calculate_band_flux_ab(wl, fluxes)
+                        mags_vega = calculate_band_flux_vega(wl, fluxes)
                 
-                    photometry.append([logg, feh, temp] + alpha_bools[grid_i]
-                                       + mags_vega.values() + mags_ab.values())
+                        photometry.append([logg, feh, temp] 
+                                           + alpha_bools[grid_i]
+                                           + mags_vega.values() 
+                                           + mags_ab.values())
     
     # Save and return the photometry            
     np.savetxt("photometry.csv", photometry, fmt=fmt, delimiter=",", 
@@ -522,12 +525,6 @@ def plot_jw_vs_jh_alpha(a04_grid, aNE_grid, aSTD_grid, wl, temps, fehs, loggs):
     alpha_treatment = ["Alpha Non-Enhanced (alpha=-0.4)", "Alpha Enhanced (alpha=0.4)", 
                        "Standard Alpha: alpha=0.0 (Z=0.0), alpha=0.1 (Z=-0.25), alpha=0.2 (Z=-0.5), alpha=0.3 (Z=-0.75), alpha=0.4 (Z<=-1.0)"]
     grids = [a04_grid, aNE_grid, aSTD_grid]
-    logg_i = 0
-    logg = 4.5
-    
-    alphas = [[-0.4, -0.4, -0.4, -0.4, -0.4, -0.4, -0.4, -0.4, -0.4],
-              [0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4],
-              [0.4, 0.4, 0.4, 0.4, 0.4, 0.3, 0.2, 0.1, 0.0]]
               
     alpha_bools = [[True, False, False], 
                    [False, True, False],
@@ -535,68 +532,69 @@ def plot_jw_vs_jh_alpha(a04_grid, aNE_grid, aSTD_grid, wl, temps, fehs, loggs):
     
     # Plot J-H versus J-W tracks for logg, [Fe/H], and Teff (fixed per plot)
     with PdfPages("j-h_vs_j-w_alpha.pdf") as pdf:
-        for grid_i, grid in enumerate(grids):
-            plt.close("all")
-            do_plotting = False
-            for temp_i, temp in enumerate(temps[::2]):
+        for logg_i, logg in enumerate(loggs):
+            for grid_i, grid in enumerate(grids):
+                plt.close("all")
+                do_plotting = False
+                for temp_i, temp in enumerate(temps[::2]):
             
-                j_h = []
-                j_w = []
-                marker_size = []
-                for feh_i, feh in enumerate(fehs):#[::2][:-1]):
-                    # Compute the magnitudes
-                    j_mag = calculate_band_flux(wl[:60434], 
-                                                grid[temp_i, logg_i, feh_i, :], 
-                                                j_band, "J")
-                    h_mag = calculate_band_flux(wl[:60434], 
-                                                grid[temp_i, logg_i, feh_i, :], 
-                                                h_band, "H")
-                    w_mag = calculate_band_flux(wl[:60434], 
-                                                grid[temp_i, logg_i, feh_i, :], 
-                                                w_band, "W")
+                    j_h = []
+                    j_w = []
+                    marker_size = []
+                    for feh_i, feh in enumerate(fehs):#[::2][:-1]):
+                        # Compute the magnitudes
+                        j_mag = calculate_band_flux(wl[:60434], 
+                                                    grid[temp_i, logg_i, feh_i, :], 
+                                                    j_band, "J")
+                        h_mag = calculate_band_flux(wl[:60434], 
+                                                    grid[temp_i, logg_i, feh_i, :], 
+                                                    h_band, "H")
+                        w_mag = calculate_band_flux(wl[:60434], 
+                                                    grid[temp_i, logg_i, feh_i, :], 
+                                                    w_band, "W")
                     
-                    photometry.append([logg, feh, temp, j_mag, w_mag, h_mag] + alpha_bools[grid_i])
+                        photometry.append([logg, feh, temp, j_mag, w_mag, h_mag] + alpha_bools[grid_i])
                     
-                    j_h.append(j_mag - h_mag)
-                    j_w.append(j_mag - w_mag)
+                        j_h.append(j_mag - h_mag)
+                        j_w.append(j_mag - w_mag)
                 
-                # Mask out any nan points in the series (due to the grid having
-                # gaps) so we can plot continuous lines
-                j_h = np.array(j_h)
-                j_w = np.array(j_w)
-                j_h_mask = np.isfinite(j_h)
-                j_w_mask = np.isfinite(j_w)
+                    # Mask out any nan points in the series (due to the grid having
+                    # gaps) so we can plot continuous lines
+                    j_h = np.array(j_h)
+                    j_w = np.array(j_w)
+                    j_h_mask = np.isfinite(j_h)
+                    j_w_mask = np.isfinite(j_w)
                 
-                # Plot lines and points separately to facilitate different
-                # colours and marker scales
-                if len(j_h[j_h_mask]) > 0:
-                    #plt.scatter(j_h, j_w, s=128, c=temps[::2], cmap="magma", 
-                    plt.scatter(j_h, j_w, s=128, c=fehs, cmap="magma", 
-                                zorder=2)
-                    plt.plot(j_h[j_h_mask], j_w[j_w_mask], "--", zorder=1,
-                             label="Teff=%s" % temp)            
-                    do_plotting = True
+                    # Plot lines and points separately to facilitate different
+                    # colours and marker scales
+                    if len(j_h[j_h_mask]) > 0:
+                        #plt.scatter(j_h, j_w, s=128, c=temps[::2], cmap="magma", 
+                        plt.scatter(j_h, j_w, s=128, c=fehs, cmap="magma", 
+                                    zorder=2)
+                        plt.plot(j_h[j_h_mask], j_w[j_w_mask], "--", zorder=1,
+                                 label="Teff=%s" % temp)            
+                        do_plotting = True
                     
             
-            # Only bother with axis details/save plot if the grid had data at
-            # this temperature - otherwise move on
-            if do_plotting:
-                plt.title(alpha_treatment[grid_i])
-                plt.xlabel("J-H")
-                plt.ylabel("J-W")
-                cb = plt.colorbar()
-                cb.set_label("[Fe/H]")
-                #cb.set_label(r"T$_{\rm eff}$ (K)")
-                plt.legend()
-                plt.grid()
-                plt.gcf().set_size_inches(16, 9)
+                # Only bother with axis details/save plot if the grid had data at
+                # this temperature - otherwise move on
+                if do_plotting:
+                    plt.title("[logg=%s] - %s" % (logg, alpha_treatment[grid_i]))
+                    plt.xlabel("J-H")
+                    plt.ylabel("J-W")
+                    cb = plt.colorbar()
+                    cb.set_label("[Fe/H]")
+                    #cb.set_label(r"T$_{\rm eff}$ (K)")
+                    plt.legend()
+                    plt.grid()
+                    plt.gcf().set_size_inches(16, 9)
 
-                pdf.savefig()
-            plt.close() 
+                    pdf.savefig()
+                plt.close() 
     
     # Save and return the colour information        
-    np.savetxt("photometry.csv", photometry, delimiter=",", 
-               header="logg,[Fe/h],Teff,Jmag,Wmag,Hmag,alpha_enh,alpha_dep,alpha_std")        
+    #np.savetxt("photometry.csv", photometry, delimiter=",", 
+    #           header="logg,[Fe/h],Teff,Jmag,Wmag,Hmag,alpha_enh,alpha_dep,alpha_std")        
             
     return photometry
 
