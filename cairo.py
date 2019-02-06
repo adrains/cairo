@@ -7,6 +7,7 @@ import glob
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from collections import OrderedDict
 from scipy.interpolate import interp1d
 from scipy.integrate import simps
 from matplotlib.backends.backend_pdf import PdfPages
@@ -112,14 +113,88 @@ def calculate_band_flux(wavelengths, fluxes, template_profile, filt):
                  "J":[3.129* 10**-10, 0.899], 
                  "H":[1.113* 10**-10, 1.379], 
                  "Ks":[4.283* 10**-11, 1.886]}  # erg cm-2 s-1 A-1
-    vega_mags["w"] = [np.mean([vega_mags["j"][0], vega_mags["h"][0]]),
-                      np.mean([vega_mags["j"][1], vega_mags["h"][1]])]
+    vega_mags["W"] = [np.mean([vega_mags["J"][0], vega_mags["H"][0]]),
+                      np.mean([vega_mags["J"][1], vega_mags["H"][1]])]
     
     # Calculate the magnitude of each star w.r.t. Vega
     # mag_star = -2.5 log10(F_star / F_vega) + zero-point
     mag = -2.5 * np.log10(mean_flux_density/vega_mags[filt][0]) + vega_mags[filt][1]
     
     return mag
+    
+
+def calculate_band_flux_vega(wavelengths, fluxes):
+    """Function to put a given filter profile on a different wavelength scale, 
+    and compute the fluxes given a spectrum. 
+    """
+    # Constants
+    filters = ["B", "V", "Rc", "Ic", "J", "W", "H", "Ks"]
+    
+    filter_profile_files = {"B":"filters/Bessel_B-1.txt",
+                            "V":"filters/Bessel_V-1.txt",
+                            "Rc":"filters/Bessel_R-1.txt",
+                            "Ic":"filters/Bessel_I-1.txt",
+                            "J":"filters/2mass_j_profile.txt",
+                            "W":"filters/emu_w.txt",
+                            "H":"filters/2mass_h_profile.txt",
+                            "Ks":"filters/2mass_k_profile.txt"}
+    
+    # Put the 2MASS wavelength scale in Angstroms from um
+    wl_scale_factor = {"B":1, "V":1, "Rc":1, "Ic":1, "J":10**4, "W":1, "H":10**4, "Ks":10**4}
+    
+    vega_flux = {"B":6.3170* 10**-9,
+                 "V":3.6186* 10**-9,
+                 "Rc":2.1652* 10**-9,
+                 "Ic":1.1327* 10**-9,
+                 "J":3.129* 10**-10, 
+                 "W":2.121* 10**-10,    # Mean of J and H values
+                 "H":1.113* 10**-10, 
+                 "Ks":4.283* 10**-11} # erg cm^-2 s^-1 A^-1
+    
+    vega_zp = {"B":-0.120,
+               "V":0,
+               "Rc":0.186,
+               "Ic":0.444,
+               "J":0.899, 
+               "W":1.139,   # Mean of J and H values
+               "H":1.379, 
+               "Ks":1.886}
+               
+    # Assume solar radii for synthetic fluxes/star, and scale to 10 pc distance
+    r_sun = 6.95700*10**8        # metres
+    d_10pc = 10 * 3.0857*10**16  # metres
+    
+    vega_mags = OrderedDict()
+    
+    # Compute all fluxes at once for simplicity
+    for filt in filters:
+        # Load the filter profile
+        filt_profile = np.loadtxt(filter_profile_files[filt])
+        
+        # Scale the profile wavelengths
+        filt_profile[:,0] = wl_scale_factor[filt] * filt_profile[:,0]
+        
+        # Extend the filter profile to the limits of the wavelength scale
+        filt_profile = extend_filter_profile(filt_profile)
+        
+        # Put the filter profile on the same wavelength scale
+        calc_filt_profile = interp1d(filt_profile[:,0], filt_profile[:,1],
+                                     kind="linear")
+        filt_profile = calc_filt_profile(wavelengths)
+                                     
+        # Scale the fluxes by stellar size and interstellar distance
+        flux = (r_sun / d_10pc)**2 * fluxes
+
+        # Compute the flux density of the star
+        f_lambda = (simps(flux*filt_profile*wavelengths, wavelengths)
+                    / simps(filt_profile*wavelengths, wavelengths))
+        
+        mag = -2.5 * np.log10(f_lambda/vega_flux[filt]) + vega_zp[filt]
+                
+        # Add to the dictionary of returned fluxes and move on
+        vega_mags[filt] = mag
+        
+    return vega_mags
     
 
 
@@ -132,7 +207,7 @@ def calculate_band_flux_ab(wavelengths, fluxes):
     f0_nu = 3.631 * 10 **-20 # ergs s^-1 cm^-2 Hz^-1
     zp_nu = -48.6
     
-    filters = ["u", "g", "r", "i", "z"]
+    filters = ["u", "g", "r", "i", "z", "Y"]
     
     # AB Magnitude Zeropoints from:
     # http://svo2.cab.inta-csic.es/svo/theory/fps3/index.php?id=SLOAN/
@@ -141,20 +216,21 @@ def calculate_band_flux_ab(wavelengths, fluxes):
              "g":5.055e-9,
              "r":2.904e-9,
              "i":1.967e-9,
-             "z":1.375e-9} # erg cm^-2 s^-1 A^-1
+             "z":1.375e-9,
+             "Y":1.018e-9} # erg cm^-2 s^-1 A^-1
     
     filter_profile_files = {"u":"filters/SLOAN_SDSS.u.dat",
                             "g":"filters/SLOAN_SDSS.g.dat",
                             "r":"filters/SLOAN_SDSS.r.dat",
                             "i":"filters/SLOAN_SDSS.i.dat",
-                            "z":"filters/SLOAN_SDSS.z.dat"}
+                            "z":"filters/SLOAN_SDSS.z.dat",
+                            "Y":"filters/gemini-Y.txt"}
     
     # Assume solar radii for synthetic fluxes/star, and scale to 10 pc distance
     r_sun = 6.95700*10**8        # metres
     d_10pc = 10 * 3.0857*10**16  # metres         
              
-
-    ab_mags = {}
+    ab_mags = OrderedDict()
 
     # Compute all fluxes at once for simplicity
     for filt in filters:
@@ -174,9 +250,9 @@ def calculate_band_flux_ab(wavelengths, fluxes):
 
         # Compute the flux density of the star
         # Equation 6 from Casagrande & VendenBerg 2014
-        mag = (-2.5*np.log10(simps(wavelengths*flux*filt_profile)
+        mag = (-2.5*np.log10(simps(wavelengths*flux*filt_profile, wavelengths)
                              / (f0_lambda*simps(wavelengths*filt_profile)))
-               -2.5*np.log10(simps(wavelengths*filt_profile)
+               -2.5*np.log10(simps(wavelengths*filt_profile, wavelengths)
                               / simps(filt_profile/wavelengths))
                + 18.6921)
                 
@@ -379,7 +455,51 @@ def import_marcs_flx_grid_alpha(n_wl=60434):
     return a04_grid, aNE_grid, aSTD_grid, temps, fehs, loggs
 
 
-
+# -----------------------------------------------------------------------------
+# Saving Photometry
+# -----------------------------------------------------------------------------
+def compute_photometry(a04_grid, aNE_grid, aSTD_grid, wl, temps, fehs, loggs):
+    """Conpute photometry for the alpha enhancement grid cases specified.
+    """
+    photometry = []
+    
+    grids = [a04_grid, aNE_grid, aSTD_grid]
+    logg_i = 0
+    logg = 4.5
+    
+    # Boolean flags to indicate whether grid is enhanced, depleted, or standard
+    alpha_bools = [[True, False, False], 
+                   [False, True, False],
+                   [False, False, True]]
+    
+    # Header and formatting specifications for saving the grid
+    header = ("logg,[Fe/h],Teff,alpha_enh,alpha_dep,alpha_std,"
+              "B,V,Rc,Ic,J,W,H,Ks,u,g,r,i,z,Y")
+    fmt = ["%0.1f", "%0.2f", "%i", "%i", "%i", "%i", "%0.4f", "%0.4f","%0.4f",
+           "%0.4f","%0.4f","%0.4f","%0.4f","%0.4f","%0.4f","%0.4f","%0.4f",
+           "%0.4f","%0.4f","%0.4f"]
+    
+    # Loop over each grid and calculate synthetic photometry
+    for grid_i, grid in enumerate(grids):
+        for temp_i, temp in enumerate(temps):
+            for feh_i, feh in enumerate(fehs):
+                # Get the fluxes for this portion of the grid, and check the 
+                # grid has actually been sampled here before proceeding
+                fluxes = grid[temp_i, logg_i, feh_i, :]
+                
+                if np.sum(fluxes) > 1:
+                    mags_ab = calculate_band_flux_ab(wl, fluxes)
+                    mags_vega = calculate_band_flux_vega(wl, fluxes)
+                
+                    photometry.append([logg, feh, temp] + alpha_bools[grid_i]
+                                       + mags_vega.values() + mags_ab.values())
+    
+    # Save and return the photometry            
+    np.savetxt("photometry.csv", photometry, fmt=fmt, delimiter=",", 
+               header=header)    
+    
+    return photometry
+    
 # -----------------------------------------------------------------------------
 # Plotting Colour-Colour Diagrams
 # -----------------------------------------------------------------------------
@@ -433,7 +553,7 @@ def plot_jw_vs_jh_alpha(a04_grid, aNE_grid, aSTD_grid, wl, temps, fehs, loggs):
                                                 h_band, "H")
                     w_mag = calculate_band_flux(wl[:60434], 
                                                 grid[temp_i, logg_i, feh_i, :], 
-                                                w_band, "W") * 0.9
+                                                w_band, "W")
                     
                     photometry.append([logg, feh, temp, j_mag, w_mag, h_mag] + alpha_bools[grid_i])
                     
@@ -596,7 +716,7 @@ def plot_jw_vs_jh_fixed_logg(grid, wl, temps, fehs, loggs):
                                                 h_band, "H")
                     w_mag = calculate_band_flux(wl[:60434], 
                                                 grid[temp_i, logg_i, feh_i, :], 
-                                                w_band, "W") * 0.9
+                                                w_band, "W")
                     
                     photometry.append([logg, feh, temp, j_mag, w_mag, h_mag])
                     
